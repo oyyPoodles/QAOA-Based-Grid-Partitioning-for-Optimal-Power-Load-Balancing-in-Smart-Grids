@@ -1,7 +1,9 @@
 from .plots import (
-    plot_feature_importance,
-    plot_accuracy_comparison,
+    plot_original_grid,
+    plot_partitioned_grid,
+    plot_load_distribution,
     plot_convergence,
+    plot_load_balance_comparison,
     plot_correlation_heatmap,
-    plot_comprehensive_results,
+    generate_all_plots,
 )

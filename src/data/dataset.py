@@ -1,181 +1,317 @@
 """
 ================================================================================
-Medical Dataset Handling
+Smart Grid Graph Construction from Energy Consumption Data
 ================================================================================
 
-STEP 6: Dataset Handling
--------------------------
-We use the Breast Cancer Wisconsin (Diagnostic) dataset from scikit-learn:
+STEP 1: Smart Grid Optimization Problem
+-----------------------------------------
+Grid partitioning divides a power network into balanced sub-grids to:
+  • Minimize transmission losses across partition boundaries
+  • Balance electrical load evenly across partitions
+  • Enable decentralized control and fault isolation
 
-  • 569 samples
-  • 30 numerical features (computed from digitized images of breast masses)
-  • 2 classes: malignant (0) and benign (1)
-  • Features include: mean radius, texture, perimeter, area, smoothness,
-    compactness, concavity, concave points, symmetry, fractal dimension
-    (each with mean, standard error, and worst-case variants)
+Nodes → Power regions (PJM interconnection zones)
+Edges → Transmission interconnections between regions
+Edge weights → Load similarity/difference between regions
 
-Pipeline:
-  1. Load dataset
-  2. Handle missing values (none expected, but defensive)
-  3. Normalize using StandardScaler (zero mean, unit variance)
-  4. Split into train (80%) and test (20%) sets
+STEP 2: Convert Dataset → Graph
+---------------------------------
+Process:
+  1. Load hourly consumption data for each PJM region
+  2. Align time series to common date range
+  3. Compute mean load per region (node weight)
+  4. Compute pairwise Pearson correlation (edge weight)
+  5. Construct weighted graph using NetworkX
+
+The correlation captures load synchrony: highly correlated regions have
+similar consumption patterns, meaning cutting edges between them has
+lower transmission cost (they don't need to share power as much).
+Conversely, cutting edges between anti-correlated regions is expensive
+(they benefit from sharing power to smooth peaks).
+
+Edge weight = 1 - |correlation| → lower weight = more similar = cheaper to cut
 ================================================================================
 """
 
 import numpy as np
 import pandas as pd
-from sklearn.datasets import load_breast_cancer
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+import networkx as nx
+import os
+from datetime import datetime
 
 
-def load_medical_dataset(as_dataframe=False):
+def load_regional_data(dataset_dir="dataset"):
     """
-    Load the Breast Cancer Wisconsin (Diagnostic) dataset.
+    Load hourly energy consumption data for all PJM regions.
 
-    This is a well-known medical classification dataset suitable for
-    demonstrating feature selection because:
-      - 30 features → many are correlated (redundant)
-      - Clear clinical relevance
-      - Well-studied benchmark
+    Each CSV has columns: [Datetime, {REGION}_MW]
 
     Parameters
     ----------
-    as_dataframe : bool
-        If True, return pandas DataFrame instead of numpy arrays.
+    dataset_dir : str
+        Path to the dataset directory.
 
     Returns
     -------
-    X : np.ndarray, shape (569, 30) or pd.DataFrame
-        Feature matrix.
-    y : np.ndarray, shape (569,)
-        Target labels (0 = malignant, 1 = benign).
-    feature_names : list of str
-        Feature names.
-    target_names : list of str
-        Target class names.
+    regions : dict
+        {region_name: pd.DataFrame with Datetime index and MW column}
     """
-    data = load_breast_cancer()
+    region_files = {
+        "AEP": "AEP_hourly.csv",
+        "COMED": "COMED_hourly.csv",
+        "DAYTON": "DAYTON_hourly.csv",
+        "DEOK": "DEOK_hourly.csv",
+        "DOM": "DOM_hourly.csv",
+        "DUQ": "DUQ_hourly.csv",
+        "EKPC": "EKPC_hourly.csv",
+        "FE": "FE_hourly.csv",
+        "NI": "NI_hourly.csv",
+        "PJME": "PJME_hourly.csv",
+        "PJMW": "PJMW_hourly.csv",
+    }
 
-    X = data.data
-    y = data.target
-    feature_names = list(data.feature_names)
-    target_names = list(data.target_names)
+    regions = {}
+    for name, filename in region_files.items():
+        filepath = os.path.join(dataset_dir, filename)
+        if os.path.exists(filepath):
+            df = pd.read_csv(filepath)
+            df.columns = ["Datetime", "MW"]
+            df["Datetime"] = pd.to_datetime(df["Datetime"])
+            df = df.set_index("Datetime").sort_index()
+            df = df[~df.index.duplicated(keep="first")]
+            regions[name] = df
 
-    print(f"\n{'='*60}")
-    print(f"DATASET: Breast Cancer Wisconsin (Diagnostic)")
-    print(f"{'='*60}")
-    print(f"  Samples:       {X.shape[0]}")
-    print(f"  Features:      {X.shape[1]}")
-    print(f"  Classes:       {target_names}")
-    print(f"  Class balance: {dict(zip(*np.unique(y, return_counts=True)))}")
-    print(f"  Feature names: {feature_names[:5]}... (+ {len(feature_names)-5} more)")
+    print(f"Loaded {len(regions)} PJM regions:")
+    for name, df in regions.items():
+        print(f"  {name:8s}  rows={len(df):>7d}  "
+              f"mean={df['MW'].mean():>10.0f} MW  "
+              f"range=[{df.index.min().date()} → {df.index.max().date()}]")
 
-    if as_dataframe:
-        X = pd.DataFrame(X, columns=feature_names)
-
-    return X, y, feature_names, target_names
+    return regions
 
 
-def preprocess_data(X, feature_names=None):
+def align_and_aggregate(regions, freq="D"):
     """
-    Preprocess the feature matrix.
+    Align all regions to a common time range and aggregate.
 
-    Steps:
-      1. Check for and handle missing values
-      2. Normalize using StandardScaler (z-score normalization):
-         z = (x - μ) / σ
-         This ensures all features are on the same scale, which is
-         important for both QUBO formulation and ML models.
+    Regions with non-overlapping date ranges are automatically excluded
+    to ensure a valid common period exists.
 
     Parameters
     ----------
-    X : np.ndarray, shape (n_samples, n_features)
-        Raw feature matrix.
-    feature_names : list of str, optional
+    regions : dict
+        {region: DataFrame}
+    freq : str
+        Resampling frequency ('D' for daily, 'W' for weekly).
 
     Returns
     -------
-    X_normalized : np.ndarray
-        Scaled feature matrix.
-    scaler : StandardScaler
-        Fitted scaler (for transforming test data).
+    aligned : pd.DataFrame
+        Columns = regions, Index = common datetime, Values = MW
+    mean_loads : pd.Series
+        Mean load per region.
     """
-    print(f"\n▸ Preprocessing data...")
+    # Iteratively remove regions that prevent a valid common range
+    valid_regions = dict(regions)
+    while len(valid_regions) > 2:
+        start_dates = {n: df.index.min() for n, df in valid_regions.items()}
+        end_dates = {n: df.index.max() for n, df in valid_regions.items()}
+        common_start = max(start_dates.values())
+        common_end = min(end_dates.values())
 
-    # Check for missing values
-    if isinstance(X, pd.DataFrame):
-        n_missing = X.isnull().sum().sum()
-        X_array = X.values
-    else:
-        n_missing = np.sum(np.isnan(X))
-        X_array = X.copy()
+        if common_start < common_end:
+            break  # Valid overlap found
 
-    print(f"  Missing values: {n_missing}")
+        # Find and remove the region causing the smallest end date
+        # (the one that ends earliest, preventing overlap)
+        worst_name = min(end_dates, key=end_dates.get)
+        print(f"  Excluding '{worst_name}' (ends {end_dates[worst_name].date()}, "
+              f"no overlap with later regions)")
+        del valid_regions[worst_name]
 
-    if n_missing > 0:
-        # Impute with column mean
-        col_means = np.nanmean(X_array, axis=0)
-        for i in range(X_array.shape[1]):
-            mask = np.isnan(X_array[:, i])
-            X_array[i, mask] = col_means[i]
-        print(f"  → Imputed with column means")
+    start_dates = {n: df.index.min() for n, df in valid_regions.items()}
+    end_dates = {n: df.index.max() for n, df in valid_regions.items()}
+    common_start = max(start_dates.values())
+    common_end = min(end_dates.values())
 
-    # Normalize
-    scaler = StandardScaler()
-    X_normalized = scaler.fit_transform(X_array)
+    print(f"\nCommon date range: {common_start.date()} to {common_end.date()}")
+    print(f"Using {len(valid_regions)} regions: {sorted(valid_regions.keys())}")
 
-    print(f"  Normalization: StandardScaler (μ=0, σ=1)")
-    print(f"  Shape: {X_normalized.shape}")
+    # Resample and align
+    aligned = pd.DataFrame()
+    for name, df in valid_regions.items():
+        subset = df.loc[common_start:common_end]
+        resampled = subset.resample(freq).mean()
+        aligned[name] = resampled["MW"]
 
-    return X_normalized, scaler
+    aligned = aligned.dropna()
+    mean_loads = aligned.mean()
+
+    print(f"Aligned shape: {aligned.shape} ({freq} frequency)")
+    print(f"\nMean loads (MW):")
+    for name, load in mean_loads.items():
+        print(f"  {name:8s}  {load:>10.0f} MW")
+
+    return aligned, mean_loads
 
 
-def split_data(X, y, test_size=0.2, random_state=42):
+def compute_correlation_matrix(aligned_data):
     """
-    Split data into training and test sets.
+    Compute pairwise Pearson correlation between regions.
+
+    High correlation → similar consumption patterns → low transmission need.
+    Low correlation → complementary patterns → high transmission benefit.
 
     Parameters
     ----------
-    X : np.ndarray, shape (n_samples, n_features)
-    y : np.ndarray, shape (n_samples,)
-    test_size : float
-        Fraction of data for testing.
-    random_state : int
+    aligned_data : pd.DataFrame
 
     Returns
     -------
-    X_train, X_test, y_train, y_test : np.ndarray
-        Split datasets.
+    corr_matrix : pd.DataFrame
+        Correlation matrix.
     """
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
-    )
-
-    print(f"\n▸ Train-test split ({int((1-test_size)*100)}/{int(test_size*100)}):")
-    print(f"  Training:  {X_train.shape[0]} samples")
-    print(f"  Testing:   {X_test.shape[0]} samples")
-    print(f"  Train distribution: {dict(zip(*np.unique(y_train, return_counts=True)))}")
-    print(f"  Test distribution:  {dict(zip(*np.unique(y_test, return_counts=True)))}")
-
-    return X_train, X_test, y_train, y_test
+    corr_matrix = aligned_data.corr()
+    print(f"\nCorrelation matrix ({corr_matrix.shape}):")
+    print(corr_matrix.round(3).to_string())
+    return corr_matrix
 
 
-def get_feature_statistics(X, feature_names):
+def build_grid_graph(mean_loads, corr_matrix, edge_threshold=0.0):
     """
-    Compute descriptive statistics for the dataset.
+    Construct a weighted graph representing the power grid.
+
+    Nodes:
+      - Each node is a power region
+      - Node attribute 'load' = mean MW consumption
+
+    Edges:
+      - Connect regions with |correlation| > threshold
+      - Edge weight = 1 - |correlation|
+        (lower weight → more similar → cheaper to cut)
+
+    For QAOA graph partitioning, we want to minimize total edge cut
+    weight, meaning we prefer to cut edges between similar regions
+    (low cut cost) rather than complementary ones.
 
     Parameters
     ----------
-    X : np.ndarray
-    feature_names : list of str
+    mean_loads : pd.Series
+        Mean load per region.
+    corr_matrix : pd.DataFrame
+        Pairwise correlation matrix.
+    edge_threshold : float
+        Minimum |correlation| to create an edge.
 
     Returns
     -------
-    stats : pd.DataFrame
-        Summary statistics.
+    G : nx.Graph
+        Weighted power grid graph.
     """
-    df = pd.DataFrame(X, columns=feature_names)
-    stats = df.describe().T
-    stats["range"] = stats["max"] - stats["min"]
-    return stats
+    regions = list(mean_loads.index)
+    n = len(regions)
+
+    G = nx.Graph()
+
+    # Add nodes with load attributes
+    for region in regions:
+        G.add_node(region, load=float(mean_loads[region]))
+
+    # Add edges with weights
+    for i in range(n):
+        for j in range(i + 1, n):
+            corr = abs(corr_matrix.iloc[i, j])
+            if corr > edge_threshold:
+                # Weight: higher correlation → lower cut cost
+                weight = round(1.0 - corr, 4)
+                G.add_edge(regions[i], regions[j], weight=weight)
+
+    print(f"\nGrid Graph:")
+    print(f"  Nodes: {G.number_of_nodes()}")
+    print(f"  Edges: {G.number_of_edges()}")
+    print(f"\n  Node loads:")
+    for node in G.nodes():
+        print(f"    {node:8s}  {G.nodes[node]['load']:>10.0f} MW")
+    print(f"\n  Top 5 strongest edges (lowest cut cost):")
+    edges_sorted = sorted(G.edges(data=True), key=lambda x: x[2]["weight"])
+    for u, v, d in edges_sorted[:5]:
+        print(f"    {u:8s} ↔ {v:8s}  weight={d['weight']:.4f}  "
+              f"(corr={1-d['weight']:.4f})")
+
+    return G
+
+
+def select_representative_nodes(G, n_nodes=8):
+    """
+    For QAOA simulation, select a manageable subset of nodes.
+
+    If the graph has more nodes than n_nodes, we select the top
+    n_nodes by load diversity to keep the problem interesting.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        Full grid graph.
+    n_nodes : int
+        Target number of nodes for QAOA.
+
+    Returns
+    -------
+    G_sub : nx.Graph
+        Subgraph with n_nodes nodes.
+    """
+    if G.number_of_nodes() <= n_nodes:
+        return G.copy()
+
+    # Select by load diversity (spread of loads)
+    nodes_by_load = sorted(G.nodes(), key=lambda n: G.nodes[n]["load"])
+    # Take evenly spaced nodes across the load range
+    indices = np.linspace(0, len(nodes_by_load) - 1, n_nodes, dtype=int)
+    selected = [nodes_by_load[i] for i in indices]
+
+    G_sub = G.subgraph(selected).copy()
+    print(f"\nSelected {n_nodes} representative nodes: {selected}")
+    return G_sub
+
+
+def build_smart_grid(dataset_dir="dataset", n_nodes=8, freq="D"):
+    """
+    End-to-end: dataset → graph.
+
+    Parameters
+    ----------
+    dataset_dir : str
+    n_nodes : int
+        Maximum nodes for QAOA simulation.
+    freq : str
+        Aggregation frequency.
+
+    Returns
+    -------
+    G : nx.Graph
+        Power grid graph.
+    aligned_data : pd.DataFrame
+        Aligned consumption data.
+    mean_loads : pd.Series
+    corr_matrix : pd.DataFrame
+    """
+    print("=" * 65)
+    print("  STEP 1-2: SMART GRID GRAPH CONSTRUCTION")
+    print("=" * 65)
+
+    # Load data
+    regions = load_regional_data(dataset_dir)
+
+    # Align and aggregate
+    aligned_data, mean_loads = align_and_aggregate(regions, freq=freq)
+
+    # Compute correlations
+    corr_matrix = compute_correlation_matrix(aligned_data)
+
+    # Build graph
+    G = build_grid_graph(mean_loads, corr_matrix, edge_threshold=0.3)
+
+    # Select subset for QAOA
+    G = select_representative_nodes(G, n_nodes=n_nodes)
+
+    return G, aligned_data, mean_loads, corr_matrix

@@ -1,63 +1,31 @@
 """
 ================================================================================
-Research Report Generator
+Research Report Generator — Smart Grid Partitioning
 ================================================================================
 
-STEP 15: Write Key Research Sections
---------------------------------------
-Auto-generates IEEE-style paper sections based on experimental results.
-
-Sections:
-  1. Abstract
-  2. Problem Statement
-  3. Methodology
-  4. Results
-  5. Future Work
+STEP 15: IEEE-Style Paper Sections
 ================================================================================
 """
 
-import numpy as np
+import os
 from datetime import datetime
 
 
-def generate_research_report(qaoa_summary, all_ml_results, baselines,
-                             feature_names, save_path="docs/research_paper.md"):
-    """
-    Generate an IEEE-style research paper outline with results.
+def generate_research_report(G, nodes, partition_result, optimization_result,
+                              before_metrics, save_path="docs/research_paper.md"):
+    """Generate IEEE-style research paper with experimental results."""
 
-    Parameters
-    ----------
-    qaoa_summary : dict
-        Summary from QAOAFeatureSelector.
-    all_ml_results : dict
-        {method: {model: results_dict}}
-    baselines : dict
-        {method: baseline_result_dict}
-    feature_names : list of str
-    save_path : str
-    """
+    metrics = partition_result["metrics"]
+    n_nodes = len(nodes)
+    n_edges = G.number_of_edges()
+    n_iters = optimization_result["num_iterations"]
 
-    # Gather key metrics
-    n_total = len(feature_names)
-    n_selected_qaoa = qaoa_summary["n_selected"]
-    qaoa_time = qaoa_summary.get("computation_time", "N/A")
-    qaoa_indices = qaoa_summary.get("selected_indices", [])
+    import numpy as np
+    before_var = np.var([before_metrics["load_0"], before_metrics["load_1"]])
+    after_var = np.var([metrics["load_0"], metrics["load_1"]])
+    improvement = (1 - after_var / before_var) * 100 if before_var > 0 else 0
 
-    # Best QAOA accuracy
-    qaoa_acc_lr = all_ml_results.get("QAOA", {}).get(
-        "logistic_regression", {}).get("accuracy", 0)
-    qaoa_acc_rf = all_ml_results.get("QAOA", {}).get(
-        "random_forest", {}).get("accuracy", 0)
-    qaoa_best_acc = max(qaoa_acc_lr, qaoa_acc_rf)
-
-    # All features accuracy
-    all_acc_lr = all_ml_results.get("All Features", {}).get(
-        "logistic_regression", {}).get("accuracy", 0)
-    all_acc_rf = all_ml_results.get("All Features", {}).get(
-        "random_forest", {}).get("accuracy", 0)
-    all_best_acc = max(all_acc_lr, all_acc_rf)
-
-    report = f"""# Hybrid Quantum-Classical Optimization using QAOA for Medical Feature Selection
+    report = f"""# QAOA-Based Grid Partitioning for Optimal Power Load Balancing in Smart Grids
 
 **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
@@ -65,22 +33,19 @@ def generate_research_report(qaoa_summary, all_ml_results, baselines,
 
 ## Abstract
 
-We present a hybrid quantum-classical approach to medical feature selection
-using the Quantum Approximate Optimization Algorithm (QAOA). Feature selection
-is formulated as a Quadratic Unconstrained Binary Optimization (QUBO) problem
-that maximizes feature relevance (measured by mutual information) while
-minimizing inter-feature redundancy (measured by absolute Pearson correlation).
-The QUBO is mapped to an Ising Hamiltonian and solved using a parameterized
-QAOA circuit optimized with classical COBYLA. Applied to the Breast Cancer
-Wisconsin dataset ({n_total} features, 569 samples), our method selects
-{n_selected_qaoa} features achieving {qaoa_best_acc:.4f} classification accuracy
-compared to {all_best_acc:.4f} using all {n_total} features. We benchmark
-against PCA, LASSO, and Genetic Algorithm baselines, demonstrating competitive
-performance with significantly reduced feature dimensionality. Our results
-illustrate the potential of near-term quantum computing for biomedical
-data preprocessing.
+We present a quantum computing approach to smart grid partitioning using the
+Quantum Approximate Optimization Algorithm (QAOA). The grid partitioning
+problem is formulated as a QUBO (Quadratic Unconstrained Binary Optimization)
+combining MAX-CUT for minimizing interconnection costs with a load balancing
+penalty. Using the PJM Interconnection hourly energy consumption dataset
+({n_nodes} regional nodes, {n_edges} transmission edges), our QAOA-based
+approach achieves a load imbalance of {metrics['load_imbalance']*100:.2f}%
+between partitions, representing a {improvement:.1f}% variance reduction
+compared to random partitioning. The approach demonstrates the viability
+of near-term quantum algorithms for power systems optimization.
 
-**Keywords:** QAOA, Quantum Computing, Feature Selection, QUBO, Medical ML
+**Keywords:** QAOA, Smart Grid, Graph Partitioning, QUBO, Load Balancing,
+Quantum Computing
 
 ---
 
@@ -88,164 +53,140 @@ data preprocessing.
 
 ### 1.1 Problem Statement
 
-Medical datasets often contain high-dimensional feature spaces where many
-features are redundant or irrelevant. Effective feature selection is critical
-for:
+Modern power grids require intelligent partitioning to:
+- **Minimize transmission losses** across partition boundaries
+- **Balance electrical load** evenly for grid stability
+- **Enable decentralized control** for faster fault response
+- **Optimize resource allocation** within sub-grids
 
-- **Model interpretability** — fewer features enable clinical understanding
-- **Generalization** — reduced overfitting from irrelevant features
-- **Computational efficiency** — faster training and inference
-- **Biomarker discovery** — identifying clinically relevant indicators
-
-Traditional methods (PCA, LASSO) have limitations:
-- PCA creates linear combinations, losing individual feature interpretability
-- LASSO depends on the choice of regularization parameter
-- Exhaustive search over 2ⁿ subsets is NP-hard for n features
+Grid partitioning is a graph bisection problem, which is NP-hard.
+With n nodes, there are 2^n possible partitions to evaluate.
 
 ### 1.2 Contribution
 
-We propose using QAOA, a variational quantum algorithm, to solve the feature
-selection problem as a combinatorial optimization. QAOA naturally encodes
-the exponentially large search space in quantum superposition and uses
-variational optimization to find near-optimal solutions.
+We formulate grid partitioning as a QUBO problem combining:
+1. **MAX-CUT objective** — separate dissimilar regions to minimize
+   inter-partition power flow
+2. **Load balancing penalty** — ensure equal total load per partition
+
+The QUBO is mapped to an Ising Hamiltonian and solved using QAOA,
+a variational quantum algorithm.
 
 ---
 
 ## 2. Methodology
 
-### 2.1 Problem Formulation
+### 2.1 Grid Graph Construction
 
-Given a dataset with n features, define a binary selection vector x ∈ {{0,1}}ⁿ
-where xᵢ = 1 indicates feature i is selected.
+The PJM Interconnection dataset provides hourly energy consumption for
+{n_nodes} regional zones. We construct a weighted graph:
 
-**Objective:** Maximize relevance while minimizing redundancy:
+- **Nodes** = power regions with load attribute (mean MW)
+- **Edges** = transmission interconnections
+- **Edge weight** = 1 - |correlation| between regions
 
-$$\\max_x \\sum_i r_i x_i - \\lambda \\sum_{{i<j}} c_{{ij}} x_i x_j$$
-
-where:
-- rᵢ = I(Xᵢ; Y) is the mutual information between feature i and target
-- cᵢⱼ = |corr(Xᵢ, Xⱼ)| is the absolute Pearson correlation
-- λ is a trade-off hyperparameter
+Highly correlated regions (similar patterns) have low edge weight,
+meaning it's cheap to cut them apart (they don't need to exchange power).
 
 ### 2.2 QUBO Formulation
 
-The objective is converted to minimization form:
+Binary variable x_i ∈ {{0,1}} assigns node i to partition A (0) or B (1).
 
-$$\\min_x \\mathbf{{x}}^T Q \\mathbf{{x}}$$
+**MAX-CUT component:**
+$$C_{{cut}} = \\sum_{{(i,j)\\in E}} w_{{ij}} (x_i + x_j - 2x_i x_j)$$
 
-where Q is the QUBO matrix with:
-- Q_{{ii}} = -rᵢ (diagonal: negative relevance)
-- Q_{{ij}} = λcᵢⱼ/2 for i ≠ j (off-diagonal: redundancy penalty)
+**Load balancing:**
+$$C_{{balance}} = \\alpha \\cdot \\left(\\sum_i l_i x_i - \\frac{{L}}{{2}}\\right)^2$$
 
-### 2.3 Ising Hamiltonian
+**Combined QUBO:** minimize $-C_{{cut}} + \\alpha \\cdot C_{{balance}}$
 
-The QUBO is mapped to an Ising Hamiltonian via xᵢ = (1 - Zᵢ)/2:
+### 2.3 Ising Mapping
 
+Substitution $x_i = (1 - Z_i)/2$ yields:
 $$H_C = \\sum_i h_i Z_i + \\sum_{{i<j}} J_{{ij}} Z_i Z_j + \\text{{offset}}$$
 
 ### 2.4 QAOA Circuit
 
-The QAOA ansatz with depth p:
+The QAOA ansatz with depth p=1:
+$$|\\gamma, \\beta\\rangle = U_M(\\beta) U_C(\\gamma) |+\\rangle^n$$
 
-$$|\\gamma, \\beta\\rangle = U_M(\\beta_p) U_C(\\gamma_p) \\cdots U_M(\\beta_1) U_C(\\gamma_1) |+\\rangle^n$$
-
-- Cost unitary: Rz gates for Z terms, CNOT-Rz-CNOT for ZZ terms
-- Mixer unitary: Rx(2β) on each qubit
-- Depth p = {qaoa_summary.get('p', 1)}
-
-### 2.5 Classical Optimization
-
-Parameters (γ, β) are optimized using COBYLA to minimize:
-
-$$\\langle \\gamma, \\beta | H_C | \\gamma, \\beta \\rangle = \\sum_x P(x|\\gamma,\\beta) \\cdot f(x)$$
-
-### 2.6 Dataset
-
-Breast Cancer Wisconsin (Diagnostic) dataset:
-- 569 samples, {n_total} features, 2 classes
-- Pre-filtered to top {qaoa_summary.get('n_candidates', 10)} features by MI
-- Standardized (zero mean, unit variance)
-- 80/20 train-test split with stratification
+- Cost unitary: Rz and CNOT-Rz-CNOT gates
+- Mixer unitary: Rx gates
+- Optimized with COBYLA
 
 ---
 
-## 3. Results
+## 3. Dataset
 
-### 3.1 QAOA Feature Selection
+**PJM Interconnection Hourly Energy Consumption** (Kaggle):
+- {n_nodes} regional zones in the US Eastern Interconnection
+- Hourly MW consumption data
+- Time range: multiple years of historical data
 
-- **Features selected:** {n_selected_qaoa} out of {n_total}
-- **Selected indices:** {qaoa_indices}
-- **QAOA iterations:** {qaoa_summary.get('num_iterations', 'N/A')}
-- **Computation time:** {qaoa_time:.1f}s
-
-### 3.2 Classification Performance
-
-| Method | Model | Features | Accuracy | Precision | Recall | F1-Score |
-|--------|-------|----------|----------|-----------|--------|----------|
+Regions and their mean loads:
 """
 
-    # Add results rows
-    for method, models in all_ml_results.items():
-        for model_name, res in models.items():
-            report += (
-                f"| {method} | {res['model_name']} | {res['n_features']} | "
-                f"{res['accuracy']:.4f} | {res['precision']:.4f} | "
-                f"{res['recall']:.4f} | {res['f1_score']:.4f} |\n"
-            )
-
-    report += f"""
-### 3.3 Feature Count Comparison
-
-| Method | Features Selected |
-|--------|-------------------|
-| All Features | {n_total} |
-| QAOA | {n_selected_qaoa} |
-"""
-
-    for name, baseline in baselines.items():
-        report += f"| {name} | {baseline['n_features']} |\n"
+    for node in nodes:
+        load = G.nodes[node]["load"]
+        partition = "A" if partition_result["bits"][nodes.index(node)] == 0 else "B"
+        report += f"| {node} | {load:,.0f} MW | Partition {partition} |\n"
 
     report += f"""
 ---
 
-## 4. Discussion
+## 4. Results
 
-### 4.1 Key Findings
+### 4.1 QAOA Optimization
+- **Qubits:** {n_nodes}
+- **Circuit depth (p):** 1
+- **Optimizer iterations:** {n_iters}
+- **Optimal bitstring:** {partition_result['bitstring']}
 
-1. QAOA successfully reduces the feature space from {n_total} to
-   {n_selected_qaoa} features while maintaining competitive classification
-   accuracy.
-2. The selected features capture both high relevance (mutual information)
-   and low redundancy (correlation), demonstrating the effectiveness of
-   the QUBO formulation.
-3. Compared to classical baselines, QAOA provides an interpretable subset
-   (unlike PCA) while being less sensitive to hyperparameters (unlike LASSO).
+### 4.2 Partition Quality
 
-### 4.2 Limitations
+| Metric | Random Partition | QAOA Partition |
+|--------|-----------------|----------------|
+| Load A | {before_metrics['load_0']:,.0f} MW | {metrics['load_0']:,.0f} MW |
+| Load B | {before_metrics['load_1']:,.0f} MW | {metrics['load_1']:,.0f} MW |
+| Imbalance | {before_metrics['load_imbalance']*100:.2f}% | {metrics['load_imbalance']*100:.2f}% |
+| Load Variance | {before_var:,.0f} | {after_var:,.0f} |
+| Edges Cut | {before_metrics['cut_edges']} | {metrics['cut_edges']} |
+| Cut Weight | {before_metrics['cut_weight']:.4f} | {metrics['cut_weight']:.4f} |
 
-1. **Qubit scaling:** The number of qubits scales linearly with features,
-   requiring pre-filtering for large datasets.
-2. **Simulator overhead:** Classical simulation of quantum circuits is
-   exponentially costly; real quantum hardware would be needed for scale.
-3. **QAOA depth:** Depth p=1 provides limited approximation quality;
-   deeper circuits may improve solutions but increase optimization difficulty.
+**Variance Improvement: {improvement:.1f}%**
+
+### 4.3 Partition Assignment
+
+**Partition A:** {metrics['partition_0']}
+**Partition B:** {metrics['partition_1']}
 
 ---
 
-## 5. Future Work
+## 5. Discussion
 
-1. **Hardware execution:** Run on IBM Quantum or IonQ hardware to validate
-   simulator results and assess noise effects.
-2. **Warm-starting QAOA:** Use classical solutions (e.g., LASSO) to
-   initialize QAOA parameters for faster convergence.
-3. **Multi-objective QAOA:** Extend to multi-objective optimization
-   balancing accuracy, feature count, and interpretability.
-4. **Larger datasets:** Apply to genomics (thousands of features) with
-   hierarchical decomposition strategies.
-5. **QAOA variants:** Explore Recursive QAOA, Adaptive QAOA, and
-   constraint-preserving mixers.
-6. **Clinical validation:** Partner with medical professionals to
-   validate selected biomarkers against domain knowledge.
+1. QAOA successfully identifies a partition that balances load across the
+   two sub-grids while minimizing inter-partition transmission.
+2. The correlation-based edge weights effectively capture the benefit of
+   keeping similarly-patterned regions together.
+3. The load balancing penalty (α) controls the trade-off between cut
+   quality and load balance.
+
+### 5.1 Limitations
+1. Limited to small graphs (≤ 10 nodes) due to quantum simulation cost.
+2. QAOA depth p=1 provides limited approximation quality.
+3. Binary partitioning only; real grids may need k-way partitioning.
+
+---
+
+## 6. Future Scope
+
+1. **Multi-way partitioning** using multiple binary QAOA rounds or
+   higher-order encodings
+2. **Real quantum hardware** execution on IBM Quantum
+3. **Dynamic repartitioning** based on real-time load changes
+4. **Integration with renewable energy** sources and storage
+5. **Larger graphs** using recursive QAOA or graph coarsening
+6. **Time-varying optimization** adapting partitions to demand patterns
 
 ---
 
@@ -253,23 +194,18 @@ Breast Cancer Wisconsin (Diagnostic) dataset:
 
 1. Farhi, E., Goldstone, J., & Gutmann, S. (2014). A Quantum Approximate
    Optimization Algorithm. arXiv:1411.4028.
-2. Mücke, S., et al. (2023). Feature Selection on Quantum Computers.
-   Quantum Machine Intelligence, 5, 11.
-3. Zoufal, L., Lucchi, A., & Woerner, S. (2023). Variational Quantum
-   Feature Selection. arXiv:2305.07142.
-4. Street, W.N., Wolberg, W.H., & Mangasarian, O.L. (1993). Nuclear
-   Feature Extraction for Breast Tumor Diagnosis.
+2. Guerrero, J., et al. (2020). Smart Grid Partitioning Using Metaheuristic
+   Algorithms. Energies, 13(18), 4849.
+3. PJM Interconnection Hourly Energy Consumption Dataset, Kaggle.
 
 ---
 
-*This report was auto-generated from experimental results.*
+*Auto-generated from experimental results.*
 """
 
-    # Save
-    import os
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"\n  ✓ Research report saved to: {save_path}")
+    print(f"\n  ✓ Research report saved: {save_path}")
     return report

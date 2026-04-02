@@ -1,10 +1,10 @@
 from .hamiltonian import (
-    compute_relevance_scores,
-    compute_redundancy_matrix,
-    build_qubo_matrix,
+    build_maxcut_qubo,
+    build_balance_qubo,
+    build_grid_partition_qubo,
     qubo_to_ising,
     qubo_objective,
+    evaluate_partition,
 )
 from .circuit import build_qaoa_circuit
-from .optimizer import QAOAOptimizer
-from .feature_selector import QAOAFeatureSelector
+from .optimizer import QAOAGridOptimizer

@@ -1,19 +1,16 @@
 """
 ================================================================================
-MAIN PIPELINE
+MAIN PIPELINE - QAOA Grid Partitioning for Smart Grids
 ================================================================================
-Hybrid Quantum-Classical Optimization using QAOA for Medical Feature Selection
-
-End-to-end pipeline:
-  Phase 1: QAOA Feature Selection (Steps 1-5)
-  Phase 2: Dataset + ML Integration (Steps 6-9)
-  Phase 3: Classical Baselines (Steps 10-11)
-  Phase 4: Visualization (Step 12)
-  Phase 5: System Design (Steps 13-14) — see docs/architecture.md
+End-to-end:
+  Phase 1: Problem Formulation (Steps 1-5)
+  Phase 2: QAOA Implementation (Steps 6-8)
+  Phase 3: Practical Interpretation (Steps 9-10)
+  Phase 4: Visualization (Steps 11-12)
+  Phase 5: System Design (Steps 13-14) - see docs/architecture.md
   Phase 6: Research Output (Step 15)
 
-Usage:
-  python main.py
+Usage: python main.py
 ================================================================================
 """
 
@@ -24,184 +21,183 @@ import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.data.dataset import load_medical_dataset, preprocess_data, split_data
-from src.qaoa.feature_selector import QAOAFeatureSelector
-from src.qaoa.hamiltonian import compute_relevance_scores
-from src.ml.classifier import compare_feature_sets
-from src.ml.baselines import run_all_baselines
-from src.visualization.plots import (
-    plot_comprehensive_results,
-    plot_correlation_heatmap,
+from src.data.dataset import build_smart_grid
+from src.qaoa.hamiltonian import (
+    build_grid_partition_qubo,
+    qubo_to_ising,
+    evaluate_partition,
 )
+from src.qaoa.optimizer import QAOAGridOptimizer
+from src.visualization.plots import generate_all_plots
 from src.research.report import generate_research_report
 
 
 def main():
-    """Run the complete QAOA feature selection pipeline."""
-
     total_start = time.time()
 
-    print("\n" + "█" * 70)
-    print("█  HYBRID QUANTUM-CLASSICAL OPTIMIZATION USING QAOA")
-    print("█  FOR MEDICAL FEATURE SELECTION")
-    print("█" * 70)
+    print("\n" + "=" * 70)
+    print("  QAOA-BASED GRID PARTITIONING FOR OPTIMAL POWER")
+    print("  LOAD BALANCING IN SMART GRIDS")
+    print("=" * 70)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 2, Step 6: Load and preprocess dataset
-    # (We do data loading first to inform the QAOA setup)
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 2 — STEP 6: DATASET LOADING & PREPROCESSING")
-    print("═" * 70)
+    # ==================================================================
+    # PHASE 1: STEPS 1-2 - Build Smart Grid Graph from Dataset
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 1 - STEPS 1-2: GRID GRAPH CONSTRUCTION")
+    print("=" * 70)
 
-    X, y, feature_names, target_names = load_medical_dataset()
-    X_normalized, scaler = preprocess_data(X, feature_names)
-    X_train, X_test, y_train, y_test = split_data(X_normalized, y)
-
-    # Compute full relevance for visualization later
-    full_relevance = compute_relevance_scores(X_normalized, y)
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 1, Steps 1-5: QAOA Feature Selection
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 1 — STEPS 1-5: QAOA FEATURE SELECTION")
-    print("═" * 70)
-
-    qaoa_selector = QAOAFeatureSelector(
-        n_candidates=10,     # Pre-filter to top-10 by MI
-        lambda_param=0.5,    # Relevance-redundancy trade-off
-        p=1,                 # QAOA depth
-        shots=1024,          # Measurement shots
-        optimizer_method="COBYLA",
-        maxiter=150,
-        random_state=42,
+    G, aligned_data, mean_loads, corr_matrix = build_smart_grid(
+        dataset_dir="dataset",
+        n_nodes=8,     # Keep manageable for QAOA simulation
+        freq="D",      # Daily aggregation
     )
 
-    qaoa_selector.fit(X_train, y_train, feature_names)
-    qaoa_indices = qaoa_selector.get_selected_features()
-    qaoa_summary = qaoa_selector.get_summary()
-    convergence = qaoa_selector.get_convergence_history()
+    nodes_list = sorted(G.nodes())
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 3, Steps 10-11: Classical Baselines
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 3 — STEPS 10-11: CLASSICAL BASELINES")
-    print("═" * 70)
+    # ==================================================================
+    # PHASE 1: STEPS 3-5 - QUBO & Ising Formulation
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 1 - STEPS 3-5: QUBO & ISING FORMULATION")
+    print("=" * 70)
 
-    baselines = run_all_baselines(X_train, X_test, y_train, y_test)
+    Q, nodes = build_grid_partition_qubo(G, alpha=2.0)
+    h, J, offset = qubo_to_ising(Q)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 2, Steps 7-9: ML Training & Evaluation
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 2 — STEPS 7-9: ML TRAINING & EVALUATION")
-    print("═" * 70)
+    print(f"\n  Ising Hamiltonian:")
+    print(f"    h (linear):    {np.round(h, 4)}")
+    print(f"    Non-zero J:    {np.sum(np.abs(J) > 1e-10)}")
+    print(f"    Offset:        {offset:.4f}")
 
-    # Prepare feature selection dictionary
-    feature_selections = {
-        "All Features": None,
-        "QAOA": qaoa_indices,
-    }
+    # ==================================================================
+    # PHASE 2: STEPS 6-8 - QAOA Optimization
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 2 - STEPS 6-8: QAOA OPTIMIZATION")
+    print("=" * 70)
 
-    # Add baseline selections (for those that return indices)
-    for name, baseline in baselines.items():
-        if baseline.get("indices") is not None:
-            feature_selections[name] = baseline["indices"]
-
-    # Compare all methods
-    all_ml_results = compare_feature_sets(
-        X_train, X_test, y_train, y_test,
-        feature_selections, feature_names
+    optimizer = QAOAGridOptimizer(
+        G=G, Q=Q, nodes=nodes,
+        p=1, shots=1024, maxiter=200, random_state=42,
     )
 
-    # For PCA (creates new features, not a subset), evaluate separately
-    if "PCA" in baselines and baselines["PCA"]["indices"] is None:
-        from src.ml.classifier import train_and_evaluate
-        pca_results = {}
-        pca_data = baselines["PCA"]
-        for model_name in ["logistic_regression", "random_forest"]:
-            res = train_and_evaluate(
-                pca_data["X_train"], pca_data["X_test"],
-                y_train, y_test, model_name
-            )
-            pca_results[model_name] = res
-        all_ml_results["PCA"] = pca_results
+    opt_result = optimizer.optimize()
+    partition_result = optimizer.extract_partition(shots=8192)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 4, Step 12: Visualization
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 4 — STEP 12: VISUALIZATION")
-    print("═" * 70)
+    # ==================================================================
+    # PHASE 3: STEPS 9-10 - Practical Interpretation & Evaluation
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 3 - STEPS 9-10: EVALUATION")
+    print("=" * 70)
 
-    # Feature counts for comparison
-    feature_counts = {"All Features": len(feature_names), "QAOA": len(qaoa_indices)}
-    time_dict = {"QAOA": qaoa_summary.get("computation_time", 0)}
+    # Random partition baseline
+    np.random.seed(0)
+    random_bits = np.random.randint(0, 2, len(nodes))
+    if random_bits.sum() == 0:
+        random_bits[0] = 1
+    elif random_bits.sum() == len(nodes):
+        random_bits[0] = 0
 
-    for name, baseline in baselines.items():
-        feature_counts[name] = baseline["n_features"]
-        time_dict[name] = baseline["time"]
+    random_metrics = evaluate_partition(G, nodes, random_bits)
+    qaoa_metrics = partition_result["metrics"]
 
-    # Correlation heatmap
-    plot_correlation_heatmap(
-        X_normalized, feature_names,
-        save_path="outputs/correlation_heatmap.png",
-        max_features=15
-    )
+    # Load variance comparison
+    rand_var = np.var([random_metrics["load_0"], random_metrics["load_1"]])
+    qaoa_var = np.var([qaoa_metrics["load_0"], qaoa_metrics["load_1"]])
 
-    # Comprehensive results
-    plot_comprehensive_results(
-        all_ml_results=all_ml_results,
-        convergence_history=convergence["costs"],
-        relevance_scores=full_relevance,
-        feature_names=feature_names,
-        selected_indices=qaoa_indices,
-        feature_counts=feature_counts,
-        time_dict=time_dict,
+    print(f"\n  PERFORMANCE COMPARISON")
+    print(f"  {'-'*55}")
+    print(f"  {'Metric':<20s} {'Random':>15s} {'QAOA':>15s}")
+    print(f"  {'-'*55}")
+    print(f"  {'Load A':<20s} {random_metrics['load_0']:>12,.0f} MW {qaoa_metrics['load_0']:>12,.0f} MW")
+    print(f"  {'Load B':<20s} {random_metrics['load_1']:>12,.0f} MW {qaoa_metrics['load_1']:>12,.0f} MW")
+    print(f"  {'Imbalance':<20s} {random_metrics['load_imbalance']*100:>12.2f} %  {qaoa_metrics['load_imbalance']*100:>12.2f} %")
+    print(f"  {'Load Variance':<20s} {rand_var:>15,.0f} {qaoa_var:>15,.0f}")
+    print(f"  {'Edges Cut':<20s} {random_metrics['cut_edges']:>15d} {qaoa_metrics['cut_edges']:>15d}")
+    print(f"  {'Cut Weight':<20s} {random_metrics['cut_weight']:>15.4f} {qaoa_metrics['cut_weight']:>15.4f}")
+    print(f"  {'-'*55}")
+
+    improvement = 0
+    if rand_var > 0:
+        improvement = (1 - qaoa_var / rand_var) * 100
+        print(f"\n  Variance improvement: {improvement:.1f}%")
+
+    # Estimated transmission loss
+    rand_loss = random_metrics["cut_weight"] * abs(random_metrics["load_0"] - random_metrics["load_1"])
+    qaoa_loss = qaoa_metrics["cut_weight"] * abs(qaoa_metrics["load_0"] - qaoa_metrics["load_1"])
+    print(f"\n  Estimated transmission loss proxy:")
+    print(f"    Random: {rand_loss:,.0f}")
+    print(f"    QAOA:   {qaoa_loss:,.0f}")
+    if rand_loss > 0:
+        print(f"    Reduction: {(1 - qaoa_loss / rand_loss) * 100:.1f}%")
+
+    # ==================================================================
+    # PHASE 4: STEPS 11-12 - Visualization
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 4 - STEPS 11-12: VISUALIZATION")
+    print("=" * 70)
+
+    # Filter corr_matrix to only include nodes in the graph
+    corr_sub = corr_matrix.loc[
+        [n for n in nodes if n in corr_matrix.index],
+        [n for n in nodes if n in corr_matrix.columns]
+    ]
+
+    generate_all_plots(
+        G=G,
+        nodes=nodes,
+        partition_bits=partition_result["bits"],
+        cost_history=opt_result["convergence_history"],
+        corr_matrix=corr_sub,
+        before_metrics=random_metrics,
+        after_metrics=qaoa_metrics,
         save_dir="outputs",
     )
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 6, Step 15: Research Report
-    # ══════════════════════════════════════════════════════════════════
-    print("\n\n" + "═" * 70)
-    print("  PHASE 6 — STEP 15: RESEARCH REPORT")
-    print("═" * 70)
+    # ==================================================================
+    # PHASE 6: STEP 15 - Research Report
+    # ==================================================================
+    print("\n\n" + "=" * 70)
+    print("  PHASE 6 - STEP 15: RESEARCH REPORT")
+    print("=" * 70)
 
     generate_research_report(
-        qaoa_summary=qaoa_summary,
-        all_ml_results=all_ml_results,
-        baselines=baselines,
-        feature_names=feature_names,
+        G=G,
+        nodes=nodes,
+        partition_result=partition_result,
+        optimization_result=opt_result,
+        before_metrics=random_metrics,
         save_path="docs/research_paper.md",
     )
 
-    # ══════════════════════════════════════════════════════════════════
-    # FINAL SUMMARY
-    # ══════════════════════════════════════════════════════════════════
+    # ==================================================================
+    # SUMMARY
+    # ==================================================================
     total_time = time.time() - total_start
 
-    print("\n\n" + "█" * 70)
-    print("█  PIPELINE COMPLETE")
-    print("█" * 70)
-    print(f"\n  Total execution time: {total_time:.1f}s")
-    print(f"\n  QAOA selected {len(qaoa_indices)} features from {len(feature_names)} total")
-    print(f"  Selected feature indices: {qaoa_indices.tolist()}")
-    print(f"  Selected feature names: {[feature_names[i] for i in qaoa_indices]}")
+    print("\n\n" + "=" * 70)
+    print("  PIPELINE COMPLETE")
+    print("=" * 70)
+    print(f"\n  Total time:        {total_time:.1f}s")
+    print(f"  Grid:              {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    print(f"  QAOA partition:    {partition_result['bitstring']}")
+    print(f"  Partition A:       {qaoa_metrics['partition_0']}")
+    print(f"  Partition B:       {qaoa_metrics['partition_1']}")
+    print(f"  Load imbalance:    {qaoa_metrics['load_imbalance']*100:.2f}%")
     print(f"\n  Generated outputs:")
-    print(f"    📊 outputs/feature_importance.png")
-    print(f"    📊 outputs/accuracy_comparison.png")
-    print(f"    📊 outputs/qaoa_convergence.png")
-    print(f"    📊 outputs/correlation_heatmap.png")
-    print(f"    📊 outputs/feature_count_comparison.png")
-    print(f"    📊 outputs/computation_time.png")
-    print(f"    📄 docs/research_paper.md")
-    print(f"\n" + "█" * 70 + "\n")
+    print(f"    outputs/original_grid.png")
+    print(f"    outputs/partitioned_grid.png")
+    print(f"    outputs/load_distribution.png")
+    print(f"    outputs/qaoa_convergence.png")
+    print(f"    outputs/correlation_heatmap.png")
+    print(f"    outputs/load_balance_comparison.png")
+    print(f"    docs/research_paper.md")
+    print(f"\n" + "=" * 70 + "\n")
 
 
 if __name__ == "__main__":
